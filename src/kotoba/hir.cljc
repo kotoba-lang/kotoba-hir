@@ -1,0 +1,198 @@
+(ns kotoba.hir
+  (:require [clojure.set :as set]))
+
+(def formats #{:kotoba.hir/v2 :kotoba.hir/v3})
+
+(def ^:private module-keys
+  #{:format :namespace :schemas :schema-identities :entry :exports :result
+    :effects :named-operations :language-profile :functions})
+
+(def ^:private required-function-keys
+  #{:name :params :result :effects :body})
+
+(def ^:private function-keys
+  (into required-function-keys
+        #{:source-name :param-types :result-inferred? :effects-ceiling
+          :closure-param-indexes :i64-pair-chain-param-indexes :closure-result?
+          :lazy-thunk? :loop-helper? :callable-param-contracts
+          :callable-result-contract}))
+
+(def ^:private max-form-depth 256)
+(def ^:private max-form-nodes 1000000)
+
+(defn- reject! [problem data]
+  (throw (ex-info (str "HIR rejected: " (name problem))
+                  (assoc data :phase :hir-validation :problem problem))))
+
+(defn- portable-scalar? [value]
+  (or (nil? value) (boolean? value) (number? value) (string? value)
+      (keyword? value) (symbol? value) (char? value)))
+
+(defn- validate-portable-form!
+  "Reject host objects and unbounded nesting in checked expression/type data."
+  [form]
+  (let [nodes (volatile! 0)]
+    (letfn [(walk! [value depth]
+              (vswap! nodes inc)
+              (when (> @nodes max-form-nodes)
+                (reject! :form-node-limit {:limit max-form-nodes}))
+              (when (> depth max-form-depth)
+                (reject! :form-depth-limit {:limit max-form-depth}))
+              (cond
+                (portable-scalar? value) nil
+                (map? value) (doseq [[k v] value]
+                               (walk! k (inc depth))
+                               (walk! v (inc depth)))
+                (or (vector? value) (set? value) (seq? value))
+                (doseq [item value] (walk! item (inc depth)))
+                :else (reject! :non-portable-form
+                               {:value-type #?(:clj (class value)
+                                               :cljs (type value))})))]
+      (walk! form 0)))
+  form)
+
+(defn- valid-effect? [effect]
+  (and (vector? effect)
+       (= 2 (count effect))
+       (= :cap/call (first effect))
+       (integer? (second effect))
+       (not (neg? (second effect)))))
+
+(defn- validate-effects! [effects context]
+  (when-not (and (set? effects) (every? valid-effect? effects))
+    (reject! :invalid-effects (assoc context :effects effects))))
+
+(defn- valid-indexes? [indexes parameter-count]
+  (and (vector? indexes)
+       (= (count indexes) (count (distinct indexes)))
+       (every? #(and (integer? %) (<= 0 %)
+                     (< % parameter-count))
+               indexes)))
+
+(defn- validate-function! [format function]
+  (when-not (map? function)
+    (reject! :function-not-map {:function function}))
+  (let [keys* (set (keys function))
+        unknown (set/difference keys* function-keys)
+        missing (set/difference required-function-keys keys*)
+        {:keys [name source-name params param-types effects effects-ceiling body]}
+        function]
+    (when (seq unknown)
+      (reject! :unknown-function-keys {:function name :keys unknown}))
+    (when (seq missing)
+      (reject! :missing-function-keys {:function name :keys missing}))
+    (when-not (symbol? name)
+      (reject! :invalid-function-name {:function name}))
+    (when-not (or (nil? source-name) (symbol? source-name))
+      (reject! :invalid-source-name {:function name :source-name source-name}))
+    (when-not (and (vector? params) (every? symbol? params)
+                   (= (count params) (count (distinct params))))
+      (reject! :invalid-parameters {:function name :params params}))
+    (if (= :kotoba.hir/v3 format)
+      (when-not (and (vector? param-types)
+                     (= (count params) (count param-types)))
+        (reject! :invalid-parameter-types
+                 {:function name :params params :param-types param-types}))
+      (when (contains? function :param-types)
+        (reject! :v2-parameter-types {:function name})))
+    (validate-effects! effects {:function name})
+    (when (contains? function :effects-ceiling)
+      (validate-effects! effects-ceiling {:function name :field :effects-ceiling})
+      (when-not (set/subset? effects effects-ceiling)
+        (reject! :effect-ceiling-exceeded
+                 {:function name :effects effects :ceiling effects-ceiling})))
+    (doseq [field [:closure-param-indexes :i64-pair-chain-param-indexes]
+            :when (contains? function field)]
+      (when-not (valid-indexes? (get function field) (count params))
+        (reject! :invalid-parameter-indexes
+                 {:function name :field field :indexes (get function field)})))
+    (doseq [field [:closure-result? :lazy-thunk? :loop-helper?]
+            :when (contains? function field)]
+      (when-not (boolean? (get function field))
+        (reject! :invalid-boolean-annotation
+                 {:function name :field field :value (get function field)})))
+    (when (contains? function :result-inferred?)
+      (when-not (or (nil? (:result-inferred? function))
+                    (boolean? (:result-inferred? function)))
+        (reject! :invalid-result-inferred {:function name})))
+    (when (contains? function :callable-param-contracts)
+      (let [contracts (:callable-param-contracts function)]
+        (when-not (and (map? contracts)
+                       (every? #(and (integer? %) (<= 0 %) (< % (count params)))
+                               (keys contracts)))
+          (reject! :invalid-callable-parameter-contracts
+                   {:function name :contracts contracts}))))
+    (when (nil? body)
+      (reject! :missing-function-body {:function name}))
+    (validate-portable-form! (:result function))
+    (when param-types (validate-portable-form! param-types))
+    (when-let [contract (:callable-result-contract function)]
+      (validate-portable-form! contract))
+    (when-let [contracts (:callable-param-contracts function)]
+      (validate-portable-form! contracts))
+    (validate-portable-form! body))
+  function)
+
+(defn validate!
+  "Validate the checked HIR module envelope and return it unchanged.
+
+  This validates the inter-repository contract, not source semantics: sema is
+  responsible for proving that admitted expression operations are well typed."
+  [hir]
+  (when-not (map? hir)
+    (reject! :module-not-map {:hir hir}))
+  (let [keys* (set (keys hir))
+        unknown (set/difference keys* module-keys)
+        missing (set/difference module-keys keys*)
+        {:keys [format namespace schemas schema-identities entry exports result
+                effects named-operations language-profile functions]} hir]
+    (when (seq unknown) (reject! :unknown-module-keys {:keys unknown}))
+    (when (seq missing) (reject! :missing-module-keys {:keys missing}))
+    (when-not (contains? formats format)
+      (reject! :unsupported-format {:format format}))
+    (when-not (or (nil? namespace) (symbol? namespace))
+      (reject! :invalid-namespace {:namespace namespace}))
+    (when-not (or (nil? schemas) (map? schemas))
+      (reject! :invalid-schemas {:schemas schemas}))
+    (when-not (or (nil? schema-identities) (map? schema-identities))
+      (reject! :invalid-schema-identities {:schema-identities schema-identities}))
+    (when-not (or (nil? language-profile) (keyword? language-profile))
+      (reject! :invalid-language-profile {:language-profile language-profile}))
+    (when-not (and (vector? functions) (seq functions))
+      (reject! :invalid-functions {:functions functions}))
+    (doseq [function functions] (validate-function! format function))
+    (let [names (mapv :name functions)
+          name-set (set names)
+          by-name (into {} (map (juxt :name identity)) functions)]
+      (when-not (= (count names) (count name-set))
+        (reject! :duplicate-function-names {:names names}))
+      (when-not (and (vector? exports) (every? symbol? exports)
+                     (= (count exports) (count (distinct exports)))
+                     (set/subset? (set exports) name-set))
+        (reject! :invalid-exports {:exports exports :functions name-set}))
+      (when-not (or (nil? entry) (and (symbol? entry) (contains? name-set entry)
+                                      (some #{entry} exports)))
+        (reject! :invalid-entry {:entry entry :exports exports}))
+      (if entry
+        (when-not (= result (:result (get by-name entry)))
+          (reject! :entry-result-mismatch
+                   {:entry entry :result result
+                    :function-result (:result (get by-name entry))}))
+        (when (some? result)
+          (reject! :entryless-result {:result result}))))
+    (validate-effects! effects {:scope :module})
+    (let [inferred (reduce set/union #{} (map :effects functions))]
+      (when-not (= effects inferred)
+        (reject! :module-effects-mismatch
+                 {:effects effects :function-effects inferred})))
+    (when-not (and (set? named-operations) (every? keyword? named-operations))
+      (reject! :invalid-named-operations {:named-operations named-operations}))
+    (validate-portable-form! schemas)
+    (validate-portable-form! schema-identities))
+  hir)
+
+(defn valid? [hir]
+  (try
+    (validate! hir)
+    true
+    (catch #?(:clj Exception :cljs :default) _ false)))
