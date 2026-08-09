@@ -24,9 +24,24 @@
   (throw (ex-info (str "HIR rejected: " (name problem))
                   (assoc data :phase :hir-validation :problem problem))))
 
+(defn- portable-bigint? [value]
+  #?(:clj false
+     :cljs (boolean
+            (and (some? value)
+                 (try (= (.-constructor value) js/BigInt)
+                      (catch :default _ false))))))
+
 (defn- portable-scalar? [value]
   (or (nil? value) (boolean? value) (number? value) (string? value)
-      (keyword? value) (symbol? value) (char? value)))
+      (keyword? value) (symbol? value) (char? value)
+      (portable-bigint? value)))
+
+(defn- nonnegative-integer? [value]
+  (and (or (integer? value) (portable-bigint? value))
+       #?(:clj (not (neg? value))
+          :cljs (if (portable-bigint? value)
+                  (not (< value (js/BigInt 0)))
+                  (not (neg? value))))))
 
 (defn- validate-portable-form!
   "Reject host objects and unbounded nesting in checked expression/type data."
@@ -55,8 +70,7 @@
   (and (vector? effect)
        (= 2 (count effect))
        (= :cap/call (first effect))
-       (integer? (second effect))
-       (not (neg? (second effect)))))
+       (nonnegative-integer? (second effect))))
 
 (defn- validate-effects! [effects context]
   (when-not (and (set? effects) (every? valid-effect? effects))
