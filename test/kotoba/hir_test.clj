@@ -69,3 +69,25 @@
                         (hir/validate!
                          (assoc-in untyped-hir [:functions 0 :body] (Object.)))))
   (is (false? (hir/valid? (assoc untyped-hir :format :kotoba.hir/v99)))))
+
+(deftest abort-is-a-row-member-and-nothing-else-is
+  (testing "a private function that aborts carries :abort in its row"
+    (let [aborting (assoc untyped-hir
+                          :effects #{:abort}
+                          :entry nil :result nil
+                          :exports ['main]
+                          :named-operations #{}
+                          :functions [{:name 'parse :params ['s] :result [:result :i64 :string]
+                                       :effects #{:abort}
+                                       :body '(result-err-of [:result :i64 :string] "empty")}
+                                      {:name 'main :params [] :result :i64
+                                       :effects #{}
+                                       :body '(result-match-of [:result :i64 :string] (parse 1)
+                                                               v v e 0)}])]
+      (is (hir/valid? aborting))))
+  (testing "no other keyword is a row member"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-effects"
+                          (hir/validate! (assoc-in untyped-hir [:functions 0 :effects]
+                                                   #{:aborts}))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-effects"
+                          (hir/validate! (assoc untyped-hir :effects #{:throw}))))))

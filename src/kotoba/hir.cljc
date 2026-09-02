@@ -66,11 +66,21 @@
       (walk! form 0)))
   form)
 
+;; An effect row holds two kinds of member. `[:cap/call id]` is an authority
+;; the function exercises. `:abort` is a TRACKED CONTROL EFFECT (kotoba-lang
+;; `lang/abort-ability.edn`, slice 1): the function may leave its caller's
+;; scope through a typed abort, which the frontend lowers to a `[:result T E]`
+;; result before this contract sees the body. The keyword carries no error
+;; type on purpose -- E lives in the elaborated `:result`, the row only says
+;; that the function aborts. Nothing else is admitted: a keyword that is not
+;; `:abort` is not a row member, so a misspelling fails closed here rather
+;; than reading as an effect nothing enforces.
 (defn- valid-effect? [effect]
-  (and (vector? effect)
-       (= 2 (count effect))
-       (= :cap/call (first effect))
-       (nonnegative-integer? (second effect))))
+  (or (= :abort effect)
+      (and (vector? effect)
+           (= 2 (count effect))
+           (= :cap/call (first effect))
+           (nonnegative-integer? (second effect)))))
 
 (defn- validate-effects! [effects context]
   (when-not (and (set? effects) (every? valid-effect? effects))
