@@ -37,5 +37,5 @@ invariants without repeating source-language type inference.
 ## Development
 
 ```sh
-clojure -M:test
+kbb -M:test
 ```
