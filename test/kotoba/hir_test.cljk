@@ -85,7 +85,26 @@
                                        :body '(result-match-of [:result :i64 :string] (parse 1)
                                                                v v e 0)}])]
       (is (hir/valid? aborting))))
+  (testing "a handler specialization carries the pure ability :state in its row"
+    ;; lang/state-ability.edn slice 1: the function that installs the handler
+    ;; does not carry it, the specialization does, and the module row is the
+    ;; union of the function rows as for every other member.
+    (let [stateful (assoc untyped-hir
+                          :effects #{:state}
+                          :named-operations #{}
+                          :functions [{:name 'tick :params ['s] :result :i64
+                                       :effects #{:state}
+                                       :body '(+ s 1)}
+                                      {:name 'main :params [] :result :i64
+                                       :effects #{}
+                                       :body '(tick 41)}])]
+      (is (hir/valid? stateful))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"module-effects-mismatch"
+                            (hir/validate! (assoc stateful :effects #{}))))))
   (testing "no other keyword is a row member"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-effects"
+                          (hir/validate! (assoc-in untyped-hir [:functions 0 :effects]
+                                                   #{:states}))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-effects"
                           (hir/validate! (assoc-in untyped-hir [:functions 0 :effects]
                                                    #{:aborts}))))
