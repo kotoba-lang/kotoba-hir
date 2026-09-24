@@ -1,6 +1,6 @@
 (ns kotoba.hir
   {:kotoba/export [formats valid? validate!]}
-  (:require [clojure.set :as set]))
+  (:require [kotoba.lang.coll :as set]))
 
 (def formats #{:kotoba.hir/v2 :kotoba.hir/v3})
 
