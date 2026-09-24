@@ -83,11 +83,19 @@
 ;; scope through a typed abort, which the frontend lowers to a `[:result T E]`
 ;; result before this contract sees the body. The keyword carries no error
 ;; type on purpose -- E lives in the elaborated `:result`, the row only says
-;; that the function aborts. Nothing else is admitted: a keyword that is not
-;; `:abort` is not a row member, so a misspelling fails closed here rather
-;; than reading as an effect nothing enforces.
+;; that the function aborts. `:state` is the PURE ABILITY state (kotoba-lang
+;; `lang/state-ability.edn`, slice 1): the function performs get/put, which a
+;; handler written in the language answers; the frontend has already lowered it
+;; by state passing, so the keyword is the function's TYPE and no authority.
+;; Nothing else is admitted: a keyword that is not one of these two is not a
+;; row member, so a misspelling fails closed here rather than reading as an
+;; effect nothing enforces.
+(def ^:private control-effects
+  "The keyword row members: tracked control effects and pure abilities."
+  #{:abort :state})
+
 (defn- valid-effect? [effect]
-  (or (= :abort effect)
+  (or (contains? control-effects effect)
       (and (vector? effect)
            (= 2 (count effect))
            (= :cap/call (first effect))
