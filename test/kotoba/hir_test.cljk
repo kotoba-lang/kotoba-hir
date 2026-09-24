@@ -1,5 +1,5 @@
 (ns kotoba.hir-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.hir :as hir]))
 
 (def untyped-hir
