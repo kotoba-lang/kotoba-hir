@@ -1,0 +1,159 @@
+(ns kotoba.form
+  "A typed, recursive s-expression value for Kotoba source that walks compiler
+  data (KIR/HIR forms, type descriptors, module maps).
+
+  Kotoba's :document is bounded (depth 8, 32 items per container), and a
+  compiler's data is not. A record that refers to itself through a `[:list
+  [:ref q]]` field is unbounded in both, is a closed nominal type, and needs no
+  host: this is that record. It is Kotoba-only (the host walks real Clojure
+  data); a module that wants it requires it under `#?(:kotoba ...)` and declares
+  the same `:form/r` schema, which is one type because schemas compare
+  structurally.
+
+  Tags: 0 nil, 1 bool (n is 0 or 1), 2 int (n), 3 string (s), 4 keyword (k),
+  5 symbol (s), 6 list/seq, 7 vector, 8 set, 9 map (kids are k v k v ...)."
+  {:kotoba/export [bool-form count-of eq first-of form-map form-seq form-set form-vec int-form
+                   int-value is-bool? is-int? is-keyword? is-map? is-nil? is-seq? is-set?
+                   is-string? is-symbol? is-vec? kids-of keyword-form keyword-value form-get
+                   form-has? no-forms nth-of nil-form one-form string-form string-value
+                   symbol-form symbol-value tag-of is-true? two-forms three-forms
+                   append-form is-list-like? bool-value]}
+  (:schemas {:form/r [:record :form/r [[:tag :i64] [:s :string] [:n :i64] [:k :keyword]
+                                       [:kids [:list [:ref :form/r]]]]]}))
+
+(defn no-forms [] [:list [:ref :form/r]]
+  (typed-list-new [:list [:ref :form/r]]))
+
+(defn one-form [a [:ref :form/r]] [:list [:ref :form/r]]
+  (typed-list-new [:list [:ref :form/r]] a))
+
+(defn two-forms [a [:ref :form/r] b [:ref :form/r]] [:list [:ref :form/r]]
+  (typed-list-new [:list [:ref :form/r]] a b))
+
+(defn three-forms [a [:ref :form/r] b [:ref :form/r] c [:ref :form/r]] [:list [:ref :form/r]]
+  (typed-list-new [:list [:ref :form/r]] a b c))
+
+(defn append-form [xs [:list [:ref :form/r]] x [:ref :form/r]] [:list [:ref :form/r]]
+  (typed-list-conj [:list [:ref :form/r]] xs x))
+
+(defn- mk [t :i64 s :string n :i64 k :keyword kids [:list [:ref :form/r]]] [:ref :form/r]
+  (record-new [:ref :form/r] t s n k kids))
+
+(defn nil-form [] [:ref :form/r] (mk 0 "" 0 :none (no-forms)))
+(defn bool-form [b :bool] [:ref :form/r] (mk 1 "" (if b 1 0) :none (no-forms)))
+(defn int-form [n :i64] [:ref :form/r] (mk 2 "" n :none (no-forms)))
+(defn string-form [s :string] [:ref :form/r] (mk 3 s 0 :none (no-forms)))
+(defn keyword-form [k :keyword] [:ref :form/r] (mk 4 "" 0 k (no-forms)))
+(defn symbol-form [s :string] [:ref :form/r] (mk 5 s 0 :none (no-forms)))
+(defn form-seq [kids [:list [:ref :form/r]]] [:ref :form/r] (mk 6 "" 0 :none kids))
+(defn form-vec [kids [:list [:ref :form/r]]] [:ref :form/r] (mk 7 "" 0 :none kids))
+(defn form-set [kids [:list [:ref :form/r]]] [:ref :form/r] (mk 8 "" 0 :none kids))
+(defn form-map [kids [:list [:ref :form/r]]] [:ref :form/r] (mk 9 "" 0 :none kids))
+
+(defn tag-of [f [:ref :form/r]] :i64 (record-get [:ref :form/r] f :tag))
+(defn kids-of [f [:ref :form/r]] [:list [:ref :form/r]] (record-get [:ref :form/r] f :kids))
+(defn int-value [f [:ref :form/r]] :i64 (record-get [:ref :form/r] f :n))
+(defn string-value [f [:ref :form/r]] :string (record-get [:ref :form/r] f :s))
+(defn symbol-value [f [:ref :form/r]] :string (record-get [:ref :form/r] f :s))
+(defn keyword-value [f [:ref :form/r]] :keyword (record-get [:ref :form/r] f :k))
+(defn bool-value [f [:ref :form/r]] :bool (= 1 (record-get [:ref :form/r] f :n)))
+
+(defn is-nil? [f [:ref :form/r]] :bool (= 0 (tag-of f)))
+(defn is-bool? [f [:ref :form/r]] :bool (= 1 (tag-of f)))
+(defn is-int? [f [:ref :form/r]] :bool (= 2 (tag-of f)))
+(defn is-string? [f [:ref :form/r]] :bool (= 3 (tag-of f)))
+(defn is-keyword? [f [:ref :form/r]] :bool (= 4 (tag-of f)))
+(defn is-symbol? [f [:ref :form/r]] :bool (= 5 (tag-of f)))
+(defn is-seq? [f [:ref :form/r]] :bool (= 6 (tag-of f)))
+(defn is-vec? [f [:ref :form/r]] :bool (= 7 (tag-of f)))
+(defn is-set? [f [:ref :form/r]] :bool (= 8 (tag-of f)))
+(defn is-map? [f [:ref :form/r]] :bool (= 9 (tag-of f)))
+(defn is-list-like? [f [:ref :form/r]] :bool (or (= 6 (tag-of f)) (= 7 (tag-of f))))
+(defn is-true? [f [:ref :form/r]] :bool (and (= 1 (tag-of f)) (= 1 (record-get [:ref :form/r] f :n))))
+
+(defn count-of [f [:ref :form/r]] :i64 (vector-count (kids-of f)))
+
+(defn nth-of [f [:ref :form/r] i :i64] [:ref :form/r]
+  (if (and (>= i 0) (< i (count-of f)))
+    (typed-list-nth [:list [:ref :form/r]] (kids-of f) i)
+    (nil-form)))
+
+(defn first-of [f [:ref :form/r]] [:ref :form/r] (nth-of f 0))
+
+(defn- lookup-from [kids [:list [:ref :form/r]] key [:ref :form/r] i :i64] [:ref :form/r]
+  (let [n (vector-count kids)]
+    (loop [j i]
+      (if (>= (+ j 1) n)
+        (nil-form)
+        (if (eq (typed-list-nth [:list [:ref :form/r]] kids j) key)
+          (typed-list-nth [:list [:ref :form/r]] kids (+ j 1))
+          (recur (+ j 2)))))))
+
+(defn form-get [m [:ref :form/r] key [:ref :form/r]] [:ref :form/r]
+  (lookup-from (kids-of m) key 0))
+
+(defn- lookup-has [kids [:list [:ref :form/r]] key [:ref :form/r]] :bool
+  (let [n (vector-count kids)]
+    (loop [j 0]
+      (if (>= (+ j 1) n)
+        false
+        (if (eq (typed-list-nth [:list [:ref :form/r]] kids j) key)
+          true
+          (recur (+ j 2)))))))
+
+(defn form-has? [m [:ref :form/r] key [:ref :form/r]] :bool
+  (lookup-has (kids-of m) key))
+
+(defn- member? [xs [:list [:ref :form/r]] x [:ref :form/r]] :bool
+  (let [n (vector-count xs)]
+    (loop [i 0]
+      (if (>= i n) false
+        (if (eq (typed-list-nth [:list [:ref :form/r]] xs i) x) true (recur (inc i)))))))
+
+(defn- ordered-eq [xs [:list [:ref :form/r]] ys [:list [:ref :form/r]]] :bool
+  (let [n (vector-count xs)]
+    (if (= n (vector-count ys))
+      (loop [i 0]
+        (if (>= i n) true
+          (if (eq (typed-list-nth [:list [:ref :form/r]] xs i) (typed-list-nth [:list [:ref :form/r]] ys i))
+            (recur (inc i))
+            false)))
+      false)))
+
+(defn- set-eq [xs [:list [:ref :form/r]] ys [:list [:ref :form/r]]] :bool
+  (let [n (vector-count xs)]
+    (if (= n (vector-count ys))
+      (loop [i 0]
+        (if (>= i n) true
+          (if (member? ys (typed-list-nth [:list [:ref :form/r]] xs i)) (recur (inc i)) false)))
+      false)))
+
+(defn- map-eq [xs [:list [:ref :form/r]] ys [:list [:ref :form/r]]] :bool
+  (let [n (vector-count xs)]
+    (if (= n (vector-count ys))
+      (loop [j 0]
+        (if (>= (+ j 1) n) true
+          (let [k (typed-list-nth [:list [:ref :form/r]] xs j)]
+            (if (and (lookup-has ys k)
+                     (eq (typed-list-nth [:list [:ref :form/r]] xs (+ j 1)) (lookup-from ys k 0)))
+              (recur (+ j 2))
+              false))))
+      false)))
+
+(defn eq
+  "Structural equality, as `=` on the host's data: a list and a vector are
+  different kinds here (as are they to the reader), sets and maps compare
+  without order."
+  [a [:ref :form/r] b [:ref :form/r]] :bool
+  (let [t (tag-of a)]
+    (and (= t (tag-of b))
+         (cond
+           (= t 0) true
+           (= t 1) (= (record-get [:ref :form/r] a :n) (record-get [:ref :form/r] b :n))
+           (= t 2) (= (record-get [:ref :form/r] a :n) (record-get [:ref :form/r] b :n))
+           (= t 3) (string=? (record-get [:ref :form/r] a :s) (record-get [:ref :form/r] b :s))
+           (= t 4) (= (record-get [:ref :form/r] a :k) (record-get [:ref :form/r] b :k))
+           (= t 5) (string=? (record-get [:ref :form/r] a :s) (record-get [:ref :form/r] b :s))
+           (= t 8) (set-eq (kids-of a) (kids-of b))
+           (= t 9) (map-eq (kids-of a) (kids-of b))
+           :else (ordered-eq (kids-of a) (kids-of b))))))
