@@ -17,7 +17,7 @@
                    is-string? is-symbol? is-vec? kids-of keyword-form keyword-value form-get
                    form-has? no-forms nth-of nil-form one-form string-form string-value
                    symbol-form symbol-value tag-of is-true? two-forms three-forms
-                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace?]}
+                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace? dissoc-form append-many]}
   (:schemas {:form/r [:record :form/r [[:tag :i64] [:s :string] [:n :i64] [:k :keyword]
                                        [:kids [:list [:ref :form/r]]]]]}))
 
@@ -293,3 +293,25 @@
        (if (>= j n)
          acc
          (recur (+ j 2) (typed-list-conj [:list [:ref :form/r]] acc (typed-list-nth [:list [:ref :form/r]] xs j))))))))
+
+(defn dissoc-form
+  "Map M without K (as `dissoc` on the host's map)."
+  [m [:ref :form/r] k [:ref :form/r]] [:ref :form/r]
+  (let [xs (kids-of m)
+        n (vector-count xs)]
+    (form-map
+     (loop [j 0 acc (no-forms)]
+       (if (>= (+ j 1) n)
+         acc
+         (let [key (typed-list-nth [:list [:ref :form/r]] xs j)]
+           (recur (+ j 2)
+                  (if (eq key k)
+                    acc
+                    (typed-list-conj [:list [:ref :form/r]]
+                                     (typed-list-conj [:list [:ref :form/r]] acc key)
+                                     (typed-list-nth [:list [:ref :form/r]] xs (+ j 1)))))))))))
+
+(defn append-many [xs [:list [:ref :form/r]] ys [:list [:ref :form/r]]] [:list [:ref :form/r]]
+  (let [n (vector-count ys)]
+    (loop [i 0 acc xs]
+      (if (>= i n) acc (recur (inc i) (typed-list-conj [:list [:ref :form/r]] acc (typed-list-nth [:list [:ref :form/r]] ys i)))))))
