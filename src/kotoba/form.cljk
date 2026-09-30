@@ -11,15 +11,18 @@
   structurally.
 
   Tags: 0 nil, 1 bool (n is 0 or 1), 2 int (n), 3 string (s), 4 keyword (k),
-  5 symbol (s), 6 list/seq, 7 vector, 8 set, 9 map (kids are k v k v ...)."
+  5 symbol (s), 6 list/seq, 7 vector, 8 set, 9 map (kids are k v k v ...),
+  10 f64 (n holds the IEEE-754 bits), 11 bytes (data). `span` packs the source
+  position as line * 2^32 + column, or 0 when the node has none (Form v2,
+  docs/selfhost-core-rewrite-plan-20260930.md S1)."
   {:kotoba/export [bool-form count-of eq first-of form-map form-seq form-set form-vec int-form
                    int-value is-bool? is-int? is-keyword? is-map? is-nil? is-seq? is-set?
                    is-string? is-symbol? is-vec? kids-of keyword-form keyword-value form-get
                    form-has? no-forms nth-of nil-form one-form string-form string-value
                    symbol-form symbol-value tag-of is-true? two-forms three-forms
-                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace? dissoc-form append-many edn-form]}
+                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace? dissoc-form append-many edn-form f64-form bits-of is-f64? bytes-form bytes-of is-bytes? span-of with-span]}
   (:schemas {:form/r [:record :form/r [[:tag :i64] [:s :string] [:n :i64] [:k :keyword]
-                                       [:kids [:list [:ref :form/r]]]]]
+                                       [:kids [:list [:ref :form/r]]] [:span :i64] [:data :bytes]]]
             :form/rd [:record :form/rd [[:form [:ref :form/r]] [:pos :i64]]]}))
 
 (defn no-forms [] [:list [:ref :form/r]]
@@ -38,7 +41,7 @@
   (typed-list-conj [:list [:ref :form/r]] xs x))
 
 (defn- mk [t :i64 s :string n :i64 k :keyword kids [:list [:ref :form/r]]] [:ref :form/r]
-  (record-new [:ref :form/r] t s n k kids))
+  (record-new [:ref :form/r] t s n k kids 0 (bytes-empty)))
 
 (defn nil-form [] [:ref :form/r] (mk 0 "" 0 :none (no-forms)))
 (defn bool-form [b :bool] [:ref :form/r] (mk 1 "" (if b 1 0) :none (no-forms)))
@@ -437,3 +440,19 @@
   "The one form in TEXT."
   [text :string] [:ref :form/r]
   (rd-form (rd-value text 0)))
+
+
+;; Form v2 (selfhost core rewrite S1): f64 and bytes leaves, and a source span.
+(defn f64-form [bits :i64] [:ref :form/r]
+  (record-new [:ref :form/r] 10 "" bits :none (no-forms) 0 (bytes-empty)))
+(defn bits-of [f [:ref :form/r]] :i64 (record-get [:ref :form/r] f :n))
+(defn is-f64? [f [:ref :form/r]] :bool (= 10 (tag-of f)))
+
+(defn bytes-form [b :bytes] [:ref :form/r]
+  (record-new [:ref :form/r] 11 "" 0 :none (no-forms) 0 b))
+(defn bytes-of [f [:ref :form/r]] :bytes (record-get [:ref :form/r] f :data))
+(defn is-bytes? [f [:ref :form/r]] :bool (= 11 (tag-of f)))
+
+(defn span-of [f [:ref :form/r]] :i64 (record-get [:ref :form/r] f :span))
+(defn with-span [f [:ref :form/r] line :i64 column :i64] [:ref :form/r]
+  (record-assoc [:ref :form/r] f :span (+ (* line 4294967296) column)))
