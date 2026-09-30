@@ -17,9 +17,10 @@
                    is-string? is-symbol? is-vec? kids-of keyword-form keyword-value form-get
                    form-has? no-forms nth-of nil-form one-form string-form string-value
                    symbol-form symbol-value tag-of is-true? two-forms three-forms
-                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace? dissoc-form append-many]}
+                   append-form is-list-like? bool-value assoc-form rest-list last-of cons-onto call0 call1 call2 call3 call4 call5 call6 vec2 vec3 vec4 vec5 vec6 from-document keys-of keyword-has-namespace? dissoc-form append-many edn-form]}
   (:schemas {:form/r [:record :form/r [[:tag :i64] [:s :string] [:n :i64] [:k :keyword]
-                                       [:kids [:list [:ref :form/r]]]]]}))
+                                       [:kids [:list [:ref :form/r]]]]]
+            :form/rd [:record :form/rd [[:form [:ref :form/r]] [:pos :i64]]]}))
 
 (defn no-forms [] [:list [:ref :form/r]]
   (typed-list-new [:list [:ref :form/r]]))
@@ -315,3 +316,124 @@
   (let [n (vector-count ys)]
     (loop [i 0 acc xs]
       (if (>= i n) acc (recur (inc i) (typed-list-conj [:list [:ref :form/r]] acc (typed-list-nth [:list [:ref :form/r]] ys i)))))))
+
+;; ---- an EDN reader over Form (rd-* are the reader's; edn-form is its entry) ----
+;;
+;; The forms it reads: nil true false, decimal integers, strings (unescaped by
+;; the document reader), :keywords, symbols, lists, vectors, maps, #{sets} and
+;; 'quote. A malformed text traps (an out-of-range read) rather than reading as
+;; something else.
+
+(defn- rd [f [:ref :form/r] pos :i64] [:ref :form/rd]
+  (record-new [:ref :form/rd] f pos))
+(defn- rd-form [r [:ref :form/rd]] [:ref :form/r] (record-get [:ref :form/rd] r :form))
+(defn- rd-pos [r [:ref :form/rd]] :i64 (record-get [:ref :form/rd] r :pos))
+
+(defn- rd-fail [] :i64 (vector-at (vector-i64) 0))
+
+(defn- rd-width [c :i64] :i64
+  (cond (< c 128) 1 (< c 2048) 2 (< c 65536) 3 :else 4))
+
+(defn- rd-space? [c :i64] :bool
+  (or (= c 32) (= c 10) (= c 13) (= c 9) (= c 44)))
+
+(defn- rd-delimiter? [c :i64] :bool
+  (or (rd-space? c) (= c 40) (= c 41) (= c 91) (= c 93) (= c 123) (= c 125) (= c 34) (= c 59)))
+
+(defn- rd-line-end [s :string i :i64 n :i64] :i64
+  (loop [i i]
+    (if (or (>= i n) (= 10 (string-code-point-at s i))) i (recur (+ i (rd-width (string-code-point-at s i)))))))
+
+(defn- rd-skip [s :string i :i64] :i64
+  (let [n (string-byte-length s)]
+    (loop [i i]
+      (if (>= i n)
+        i
+        (let [c (string-code-point-at s i)]
+          (cond (rd-space? c) (recur (inc i))
+                (= c 59) (recur (rd-line-end s i n))
+                :else i))))))
+
+(defn- rd-token-end [s :string i :i64 n :i64] :i64
+  (loop [i i]
+    (if (>= i n)
+      i
+      (let [c (string-code-point-at s i)]
+        (if (rd-delimiter? c) i (recur (+ i (rd-width c))))))))
+
+(defn- rd-digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+
+;; the decimal value of s[i, e), or a trap when it is not all digits
+(defn- rd-decimal [s :string i :i64 e :i64] :i64
+  (loop [j i v 0]
+    (if (>= j e)
+      v
+      (let [c (string-code-point-at s j)]
+        (if (rd-digit? c) (recur (inc j) (+ (* v 10) (- c 48))) (rd-fail))))))
+
+(defn- rd-number? [s :string i :i64 e :i64] :bool
+  (let [c (string-code-point-at s i)]
+    (or (rd-digit? c)
+        (and (= c 45) (> (- e i) 1) (rd-digit? (string-code-point-at s (inc i)))))))
+
+(defn- rd-atom [s :string i :i64] [:ref :form/rd]
+  (let [n (string-byte-length s)
+        e (rd-token-end s i n)
+        token (string-substring s i e)
+        c (string-code-point-at s i)]
+    (cond
+      (= e i) (rd (nil-form) (rd-fail))
+      (= c 58) (rd (keyword-form (keyword-from-string (string-substring s (inc i) e))) e)
+      (string=? token "nil") (rd (nil-form) e)
+      (string=? token "true") (rd (bool-form true) e)
+      (string=? token "false") (rd (bool-form false) e)
+      (rd-number? s i e)
+      (rd (int-form (if (= c 45) (- 0 (rd-decimal s (inc i) e)) (rd-decimal s i e))) e)
+      :else (rd (symbol-form token) e))))
+
+;; the closing quote of the string starting at I (a quote), past backslash escapes
+(defn- rd-string-end [s :string i :i64] :i64
+  (let [n (string-byte-length s)]
+    (loop [j (inc i)]
+      (if (>= j n)
+        (rd-fail)
+        (let [c (string-code-point-at s j)]
+          (cond (= c 34) (inc j)
+                (= c 92) (recur (+ j 2))
+                :else (recur (+ j (rd-width c)))))))))
+
+(defn- rd-string [s :string i :i64] [:ref :form/rd]
+  (let [e (rd-string-end s i)
+        d (document-edn-read (string-substring s i e))]
+    (rd (string-form (option-value-of [:option :string] (document-string-value d) "")) e)))
+
+(defn- rd-items [s :string i :i64 close :i64] [:ref :form/rd]
+  (let [n (string-byte-length s)]
+    (loop [j (rd-skip s i) acc (no-forms)]
+      (if (>= j n)
+        (rd (nil-form) (rd-fail))
+        (if (= close (string-code-point-at s j))
+          (rd (form-vec acc) (inc j))
+          (let [r (rd-value s j)]
+            (recur (rd-skip s (rd-pos r)) (typed-list-conj [:list [:ref :form/r]] acc (rd-form r)))))))))
+
+(defn- rd-value [s :string i :i64] [:ref :form/rd]
+  (let [n (string-byte-length s)
+        j (rd-skip s i)]
+    (if (>= j n)
+      (rd (nil-form) (rd-fail))
+      (let [c (string-code-point-at s j)]
+        (cond
+          (= c 40) (let [r (rd-items s (inc j) 41)] (rd (form-seq (kids-of (rd-form r))) (rd-pos r)))
+          (= c 91) (rd-items s (inc j) 93)
+          (= c 123) (let [r (rd-items s (inc j) 125)] (rd (form-map (kids-of (rd-form r))) (rd-pos r)))
+          (and (= c 35) (< (inc j) n) (= 123 (string-code-point-at s (inc j))))
+          (let [r (rd-items s (+ j 2) 125)] (rd (form-set (kids-of (rd-form r))) (rd-pos r)))
+          (= c 39) (let [r (rd-value s (inc j))] (rd (call1 "quote" (rd-form r)) (rd-pos r)))
+          (= c 34) (rd-string s j)
+          :else (rd-atom s j))))))
+
+(defn edn-form
+  "The one form in TEXT."
+  [text :string] [:ref :form/r]
+  (rd-form (rd-value text 0)))
