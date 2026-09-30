@@ -1,5 +1,5 @@
 (ns kotoba.hir
-  {:kotoba/export [formats valid? validate!]}
+  {:kotoba/export [formats valid? validate! #?(:kotoba module-problem)]}
   (:require [kotoba.lang.coll :as set])
   #?(:kotoba (:schemas {:form/r [:record :form/r [[:tag :i64] [:s :string] [:n :i64] [:k :keyword]
                                                   [:kids [:list [:ref :form/r]]] [:span :i64] [:data :bytes]]]})))
@@ -770,7 +770,9 @@
      (or (form-eq f (form-keyword-form :kotoba.hir/v2)) (form-eq f (form-keyword-form :kotoba.hir/v3)))))
 
 #?(:kotoba
-   (defn- module-problem [hir [:ref :form/r]] :keyword
+   (defn module-problem
+     "The first problem keyword of a HIR module Form, or :ok. Never aborts."
+     [hir [:ref :form/r]] :keyword
      (let [format (fget hir :format)
            namespace (fget hir :namespace)
            schemas (fget hir :schemas)
