@@ -24,6 +24,10 @@ invariants without repeating source-language type inference.
                :effects #{} :body 42}]})
 ```
 
+Namespace-bearing empty libraries use an empty function/export vector and
+no entry/result. They retain the closed-envelope and empty effect-union
+checks; this HIR admission does not prove source admission or backend support.
+
 ## Boundary
 
 - owned here: HIR versions, canonical keys, checked function envelope,

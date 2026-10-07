@@ -201,8 +201,12 @@
       (reject! :invalid-schema-identities {:schema-identities schema-identities}))
     (when-not (or (nil? language-profile) (keyword? language-profile))
       (reject! :invalid-language-profile {:language-profile language-profile}))
-    (when-not (and (vector? functions) (seq functions))
+    (when-not (vector? functions)
       (reject! :invalid-functions {:functions functions}))
+    ;; Empty libraries still need a namespace; entry/export/result and the
+    ;; empty effect union are checked below just like nonempty libraries.
+    (when (and (empty? functions) (nil? namespace))
+      (reject! :empty-library-namespace {:namespace namespace}))
     (doseq [function functions] (validate-function! format function))
     (let [names (mapv :name functions)
           name-set (set names)

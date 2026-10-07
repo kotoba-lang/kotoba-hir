@@ -1,5 +1,6 @@
 (ns kotoba.hir-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
+               :cljs [cljs.test :refer [deftest is testing]])
             [kotoba.hir :as hir]))
 
 (def untyped-hir
@@ -67,7 +68,7 @@
 (deftest expression-values-must-be-portable
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"non-portable-form"
                         (hir/validate!
-                         (assoc-in untyped-hir [:functions 0 :body] (Object.)))))
+                         (assoc-in untyped-hir [:functions 0 :body] #?(:clj (Object.) :cljs (js-obj))))))
   (is (false? (hir/valid? (assoc untyped-hir :format :kotoba.hir/v99)))))
 
 (deftest abort-is-a-row-member-and-nothing-else-is
@@ -110,3 +111,18 @@
                                                    #{:aborts}))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid-effects"
                           (hir/validate! (assoc untyped-hir :effects #{:throw}))))))
+
+(def empty-library
+  (assoc typed-library :exports [] :functions []))
+(deftest empty-library-keeps-the-closed-envelope-and-cross-field-checks
+  (doseq [format [:kotoba.hir/v2 :kotoba.hir/v3]]
+    (is (= (assoc empty-library :format format)
+           (hir/validate! (assoc empty-library :format format)))))
+  (doseq [bad [(assoc empty-library :namespace nil)
+               (assoc empty-library :functions nil)
+               (assoc empty-library :functions '())
+               (assoc empty-library :entry 'missing)
+               (assoc empty-library :exports ['missing])
+               (assoc empty-library :result :i64)
+               (assoc empty-library :effects #{[:cap/call 7]})]]
+    (is (false? (hir/valid? bad)))))
