@@ -36,7 +36,7 @@ checks; this HIR admission does not prove source admission or backend support.
 - owned by `kotoba-sema`/the current compiler frontend: parsing, name
   resolution, desugaring, type/effect checking, capability elaboration, and
   proof that expression operations are semantically valid
-- owned by `kotoba-kir`: HIR-to-KIR lowering and canonical semantic IR
+- owned by `osaho` (formerly `kotoba-kir`): HIR-to-KIR lowering and canonical semantic IR
 
 ## Development
 
