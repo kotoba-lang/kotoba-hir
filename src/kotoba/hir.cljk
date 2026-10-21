@@ -108,8 +108,8 @@
 (defn- valid-indexes? [indexes parameter-count]
   (and (vector? indexes)
        (= (count indexes) (count (distinct indexes)))
-       (every? #(and (integer? %) (<= 0 %)
-                     (< % parameter-count))
+       (every? (fn [x] (and (integer? x) (<= 0 x)
+                            (< x parameter-count)))
                indexes)))
 
 (defn- validate-function! [format function]
@@ -161,7 +161,7 @@
     (when (contains? function :callable-param-contracts)
       (let [contracts (:callable-param-contracts function)]
         (when-not (and (map? contracts)
-                       (every? #(and (integer? %) (<= 0 %) (< % (count params)))
+                       (every? (fn [x] (and (integer? x) (<= 0 x) (< x (count params))))
                                (keys contracts)))
           (reject! :invalid-callable-parameter-contracts
                    {:function name :contracts contracts}))))
